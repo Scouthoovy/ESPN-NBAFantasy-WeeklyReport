@@ -83,6 +83,11 @@ def getSavedStandings():
 
 # Advanced getter functions, using and transforming base getter functions.
 
+def getRankings():
+  standings = getStandings()
+  standings['Rank'] = standings.index + 1
+  return standings
+
 #Get all players on rosters
 def getRosterPlayers():
   teams = getTeams()
