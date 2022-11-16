@@ -85,7 +85,10 @@ def getSavedStandings():
 
 def getRankings():
   standings = getStandings()
-  standings['Rank'] = standings.index + 1
+  standings.index += 1
+  standings.rename(columns={0:"Team"}, inplace=True)
+  standings['Rank'] = standings.index
+  standings['Team'] = standings.apply(lambda row: row['Team'].team_name, axis=1)
   return standings
 
 #Get all players on rosters
