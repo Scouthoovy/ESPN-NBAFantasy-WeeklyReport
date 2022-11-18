@@ -1,0 +1,335 @@
+# Import Basketball API and all relevant libraries
+from espn_api.basketball import League
+from espn_api.basketball import Player
+
+import pandas as pd
+import numpy as np
+import math
+
+import time
+import datetime as dt
+from dateutil import tz
+
+# Setup the league variables for this year and previous year.
+leaguePreviousYear = League(league_id=1483720569, year=2022, espn_s2='AEAcEt%2BMhB7Fge2Z8ytHMzkMCzI3Pv9P2iScn2FG4%2BjItbmIma%2BKoAP32crD2jneK0ZSIpkCeuMewE2tWpBSh8V427kylczAMaNqUpWA3XlpILa8IUyjLY%2BiKLeNdEobg0TBvOfYzWIxEJYdE5%2FctLuNNvV9GVpzc4u2I6FTdEleJgkb4FLU1NGuK8CAWppO8eI0cYgIWpWfNfFHIw9NmlqFTH57vdXgYRGNq3pGJuLZxgVIq54ghOwrsynfR8uQ2yjhAwI7n74p5eqgMJ9Ifnh74mvMGOFeArbTx9KMKkYeWg%3D%3D', 
+                swid='{AA6619A1-D92E-4220-BECC-9A41FA2A0B0D}')
+league = League(league_id=1483720569, year=2023, espn_s2='AEAcEt%2BMhB7Fge2Z8ytHMzkMCzI3Pv9P2iScn2FG4%2BjItbmIma%2BKoAP32crD2jneK0ZSIpkCeuMewE2tWpBSh8V427kylczAMaNqUpWA3XlpILa8IUyjLY%2BiKLeNdEobg0TBvOfYzWIxEJYdE5%2FctLuNNvV9GVpzc4u2I6FTdEleJgkb4FLU1NGuK8CAWppO8eI0cYgIWpWfNfFHIw9NmlqFTH57vdXgYRGNq3pGJuLZxgVIq54ghOwrsynfR8uQ2yjhAwI7n74p5eqgMJ9Ifnh74mvMGOFeArbTx9KMKkYeWg%3D%3D', 
+                swid='{AA6619A1-D92E-4220-BECC-9A41FA2A0B0D}')
+
+#Constants
+dayZero = dt.datetime(2022,10,16).timestamp()
+dayZerodt = dt.date(2022,10,16)
+
+#Base level outside of API/ helper functions
+
+def getCurrentWeekNum():
+  today = dt.datetime.today().timestamp()
+  weeks = (today - dayZero) / 604800
+  weekNum = math.ceil(weeks)
+  return weekNum
+
+def getLastWeekNum():
+  return getCurrentWeekNum() - 1
+
+def createPlayerDataFrame(player):
+  playerStats = pd.DataFrame(player.stats).transpose()
+  playerStatsIndex = playerStats.index
+  playerStats['name'] = player.name
+  playerStats = playerStats.set_index(['name',playerStatsIndex])
+  return playerStats
+
+
+#Base level of API, but return all functions as dataframes for easier manipulation. 
+#The functions will return API objects, and so they will need to be transformed appropriately in whatever function they are later used in.
+
+#Get all teams not in ranked order
+def getTeams():
+  return pd.DataFrame(league.teams)
+
+#Get standings
+def getStandings():
+  return pd.DataFrame(league.standings())
+
+#Get Recent Activity for activity
+def getRecentActivity(size, activity):
+  return pd.DataFrame(league.recent_activity(size=size,msg_type=activity))
+
+#Get all free agents
+def getFreeAgents():
+  return pd.DataFrame(league.free_agents(size=1000))
+
+#Get scoreboard for weekNum week
+def getScoreboard(weekNum):
+  return pd.DataFrame(league.scoreboard(weekNum))
+
+#Get all boxscores for weekNum week
+def getBoxScores(weekNum):
+  return pd.DataFrame(league.box_scores(weekNum))
+
+#Get all boxscores for weekNum week
+def getBoxScores_adv(scoring_period, matchup_total):
+  return pd.DataFrame(league.box_scores(scoring_period=scoring_period, matchup_total=matchup_total))
+
+#Retrieve saved standings from last week.
+def getSavedStandings():
+  weekNum = getCurrentWeekNum()
+  with open('/content/drive/MyDrive/Personal Projects/NBA_Fantasy/Standings - Week of {0}.txt'.format(dayZerodt + dt.timedelta(weeks=weekNum-1)), 'r') as f:
+    standings = f.read().splitlines()
+    standings = pd.DataFrame(standings)
+    standings.index += 1
+    standings.rename(columns={0:"Team"}, inplace=True)
+    standings['Rank'] = standings.index
+  return standings
+
+# Advanced getter functions, using and transforming base getter functions.
+
+def getRankings():
+  standings = getStandings()
+  standings.index += 1
+  standings.rename(columns={0:"Team"}, inplace=True)
+  standings['Rank'] = standings.index
+  standings['Team'] = standings.apply(lambda row: row['Team'].team_name, axis=1)
+  return standings
+
+#Get all players on rosters
+def getRosterPlayers():
+  teams = getTeams()
+  players = teams.apply(lambda team: team[0].roster, axis=1)
+  players = players.explode()
+  players = players.reset_index(drop=True)
+  return players
+
+#Get all players in the league. This will be all players on rosters + all free agents.
+def getPlayers():
+  return pd.concat([getRosterPlayers(), getFreeAgents()])
+
+#Get a multi-indexed dataframe that contains the stats of all players
+def getPlayerStats():
+  players = getPlayers()
+  playerStats = []
+  for row in players.itertuples():
+    playerStats.append(createPlayerDataFrame(row._1))
+  playerStats = pd.concat(playerStats)
+  return playerStats
+
+def getBoxPlayer(scoringPeriod):
+  boxscores = getBoxScores_adv(scoringPeriod, False)
+  boxscores['HomeBoxLineup'] = boxscores.apply(lambda matchup: matchup[0].home_lineup, axis=1)
+  boxscores['AwayBoxLineup'] = boxscores.apply(lambda matchup: matchup[0].away_lineup, axis=1)
+  BoxPlayer = pd.concat([boxscores['HomeBoxLineup'],boxscores['AwayBoxLineup']])
+  BoxPlayer = BoxPlayer.explode().reset_index()
+  BoxPlayer['Player'] = BoxPlayer.apply(lambda boxplayer: boxplayer[0].name, axis=1)
+  BoxPlayer['Points'] = BoxPlayer.apply(lambda boxplayer: boxplayer[0].points, axis=1)
+  return BoxPlayer
+
+def getBestPlayers_bi():
+  playerStats = getPlayerStats()
+  playerStats = playerStats.drop('2023_total', axis=0)
+  playerStats = playerStats.drop('2023_last_15', axis=0)
+  playerStats = playerStats.drop('2022_total', axis=0)
+  playerStats = playerStats.drop('2023_last_30', axis=0)
+  playerStats = playerStats.drop('2023_projected', axis=0)
+  playerStats = playerStats.drop('2022_projected', axis=0)
+  playerStats['Name'] = playerStats.index[0]
+  playerStats['Stat'] = playerStats.index[1]
+  return playerStats
+
+def getBestPlayersLastWeek():
+  playerStats = getPlayerStats()
+  playerStats['Tuple'] = playerStats.index.to_numpy()
+  playerStats['Name'] = playerStats.apply(lambda row: row['Tuple'][0], axis=1)
+  playerStats['Stat'] = playerStats.apply(lambda row: row['Tuple'][1], axis=1)
+  playerStats = playerStats[playerStats['Stat']=='2023_last_7']
+  return playerStats
+
+
+#Used in getPickupScores() to calculate the total FPTS scored in a week for a player.
+def getTotalScoredByPickup(row):
+  playername = row['Player']
+  pickupDate = row['Date (epoch ms)']
+  totalPoints = 0
+  pickupPeriod = ((pickupDate / 1000) - 6*3600 - dayZero) / 86400
+  if (pickupPeriod % 1) > 0.71:
+    startPeriod = math.ceil(pickupPeriod)
+  else:
+    startPeriod = math.floor(pickupPeriod)
+  endPeriod = int(dt.timedelta(weeks=getLastWeekNum()).total_seconds() / 86400) #Get's last day of the week, and computes number of days since dayZero
+  for period in range(startPeriod, endPeriod):
+    if period != 23:
+      boxplayers = getBoxPlayer(period)
+      points = boxplayers[boxplayers['Player']==playername]['Points'].iloc[0]
+      totalPoints += points
+
+  return totalPoints
+
+#Used in getPickupScores() to calculate the average FPTS scored in a week for a player.
+def getAverageScoredByPickup(row):
+  playername = row['Player']
+  pickupDate = row['Date (epoch ms)']
+  totalPoints = 0
+  gamesPlayed = 0
+  pickupPeriod = ((pickupDate / 1000) - 6*3600 - dayZero) / 86400
+  if (pickupPeriod % 1) > 0.71:
+    startPeriod = math.ceil(pickupPeriod)
+  else:
+    startPeriod = math.floor(pickupPeriod)
+  endPeriod = int(dt.timedelta(weeks=getLastWeekNum()).total_seconds() / 86400) #Get's last day of the week, and computes number of days since dayZero
+  for period in range(startPeriod, endPeriod):
+    if period != 23:
+      boxplayers = getBoxPlayer(period)
+      points = boxplayers[boxplayers['Player']==playername]['Points'].iloc[0]
+      totalPoints += points
+      if points != 0:
+        gamesPlayed += 1
+  if totalPoints != 0:
+    average = totalPoints / gamesPlayed
+  else:
+    average = 0
+  return average
+
+#Get total fantasy points scored
+def getTotalFPTS(weekNum):
+  allScoreboards = []
+  for week in range(weekNum):
+    scoreboard = getScoreboard(week)
+    scoreboard['AwayTeam'] = scoreboard.apply(lambda matchup: matchup[0].away_team, axis=1)
+    scoreboard['AwayScore'] = scoreboard.apply(lambda matchup: matchup[0].away_final_score, axis=1) 
+    scoreboard['HomeTeam'] = scoreboard.apply(lambda matchup: matchup[0].home_team, axis=1)
+    scoreboard['HomeScore'] = scoreboard.apply(lambda matchup: matchup[0].home_final_score, axis=1)
+    scoreboard_away = scoreboard[['AwayTeam', 'AwayScore']].rename(columns={'AwayTeam':'Team', 'AwayScore':week})
+    scoreboard_home = scoreboard[['HomeTeam', 'HomeScore']].rename(columns={'HomeTeam':'Team', 'HomeScore':week})
+
+    Scoreboard = pd.concat([scoreboard_away, scoreboard_home], axis=0).set_index('Team', drop=True)
+
+    allScoreboards.append(Scoreboard)
+
+  totalFPTS = pd.concat(allScoreboards, axis=1)
+  totalFPTS['Total'] = totalFPTS.apply(lambda x: sum(x), axis=1)
+  totalFPTS.index = totalFPTS.index.map(lambda team: team.team_name)
+  totalFPTS = totalFPTS.reset_index() 
+
+  return totalFPTS
+
+#Get closest matchups from last week
+def getCloseMatchups(weekNum):
+  scoreboard = getScoreboard(weekNum)
+  scoreboard['AwayTeam'] = scoreboard.apply(lambda matchup: matchup[0].away_team.team_name, axis=1)
+  scoreboard['AwayScore'] = scoreboard.apply(lambda matchup: matchup[0].away_final_score, axis=1) 
+  scoreboard['HomeTeam'] = scoreboard.apply(lambda matchup: matchup[0].home_team.team_name, axis=1)
+  scoreboard['HomeScore'] = scoreboard.apply(lambda matchup: matchup[0].home_final_score, axis=1)
+  scoreboard['Difference'] = np.abs(scoreboard['AwayScore'] - scoreboard['HomeScore'])
+
+  closeMatchups = scoreboard.query("Difference < 30")
+  return closeMatchups
+
+#Get upcoming power matchups for this week.
+def getPowerMatchups(weekNum):
+  scoreboard = getScoreboard(weekNum)
+  scoreboard['AwayTeam'] = scoreboard.apply(lambda matchup: matchup[0].away_team.team_name, axis=1)
+  scoreboard['AwayRank'] = scoreboard.apply(lambda matchup: matchup[0].away_team.standing, axis=1)
+  scoreboard['HomeTeam'] = scoreboard.apply(lambda matchup: matchup[0].home_team.team_name, axis=1)
+  scoreboard['HomeRank'] = scoreboard.apply(lambda matchup: matchup[0].home_team.standing, axis=1)
+  scoreboard['Strength'] = np.abs(scoreboard['AwayRank'] - scoreboard['HomeRank']) + scoreboard['AwayRank']
+  
+  powerMatchups = scoreboard.query("Strength < 5")
+  return powerMatchups
+
+#Get underdog victories
+def getUnderdogWins(weekNum):
+  scoreboard = getScoreboard(weekNum)
+  scoreboard['AwayTeam'] = scoreboard.apply(lambda matchup: matchup[0].away_team.team_name, axis=1)
+  scoreboard['AwayRank'] = scoreboard.apply(lambda matchup: matchup[0].away_team.standing, axis=1)
+  scoreboard['HomeTeam'] = scoreboard.apply(lambda matchup: matchup[0].home_team.team_name, axis=1)
+  scoreboard['HomeRank'] = scoreboard.apply(lambda matchup: matchup[0].home_team.standing, axis=1)
+  scoreboard['Winner'] = scoreboard.apply(lambda matchup: matchup[0].winner, axis=1)
+  scoreboard['WinnerName'] = scoreboard.apply(lambda row: row['AwayTeam'] if row['Winner']=='AWAY' else row['HomeTeam'], axis=1)
+  scoreboard['Rank Difference'] = scoreboard['AwayRank'] - scoreboard['HomeRank']
+  scoreboard['UnderdogWin'] = scoreboard.apply(lambda row: (row['Rank Difference'] > 0 and row['Winner'] == 'AWAY') or row['Rank Difference'] < 0 and row['Winner'] == 'HOME', axis=1)
+  scoreboard = scoreboard.query('UnderdogWin == True')
+  
+  return scoreboard
+
+
+#Wins where the winning team was down before the start of the last day.
+def getComebackWins():
+  lastWeekNum = getLastWeekNum() 
+  startPeriod = (lastWeekNum * 7) - 6
+  endPeriod = lastWeekNum * 7 + 1
+  allBoxScores = []
+  for period in range(startPeriod, endPeriod):
+    boxscore = getBoxScores_adv(scoring_period=period, matchup_total=False)
+    boxscore['AwayTeam'] = boxscore.apply(lambda matchup: matchup[0].away_team, axis=1)
+    boxscore['AwayScore'] = boxscore.apply(lambda matchup: matchup[0].away_score, axis=1) 
+    boxscore['HomeTeam'] = boxscore.apply(lambda matchup: matchup[0].home_team, axis=1)
+    boxscore['HomeScore'] = boxscore.apply(lambda matchup: matchup[0].home_score, axis=1)
+    boxscore_away = boxscore[['AwayTeam', 'AwayScore']].rename(columns={'AwayTeam':'Team', 'AwayScore':period-startPeriod+1})
+    boxscore_home = boxscore[['HomeTeam', 'HomeScore']].rename(columns={'HomeTeam':'Team', 'HomeScore':period-startPeriod+1})
+    boxscores = pd.concat([boxscore_away, boxscore_home], axis=0).set_index('Team', drop=True)
+
+    allBoxScores.append(boxscores)
+
+  totalscore = pd.concat(allBoxScores, axis=1)
+  totalscore['Total'] = totalscore.apply(lambda x: sum(x), axis=1)
+  totalscore['Last Day'] = totalscore.apply(lambda x: sum(x[0:6]),axis=1)
+  totalscore.index = totalscore.index.map(lambda team: team.team_name)
+
+  #Reconstruct matchups and compare winner to last day scores
+  matchupInfo = getBoxScores(lastWeekNum)
+  matchupInfo['AwayTeam'] = matchupInfo.apply(lambda matchup: matchup[0].away_team.team_name, axis=1)
+  matchupInfo['AwayFinalScore'] = matchupInfo.apply(lambda matchup: matchup[0].away_score, axis=1)
+  matchupInfo['HomeTeam'] = matchupInfo.apply(lambda matchup: matchup[0].home_team.team_name, axis=1)
+  matchupInfo['HomeFinalScore'] = matchupInfo.apply(lambda matchup: matchup[0].home_score, axis=1)
+  matchupInfo['AwayLastScore'] = matchupInfo.apply(lambda row: totalscore['Last Day'].loc[row['AwayTeam']], axis=1)
+  matchupInfo['HomeLastScore'] = matchupInfo.apply(lambda row: totalscore['Last Day'].loc[row['HomeTeam']], axis=1)
+  matchupInfo['WINNER'] = matchupInfo.apply(lambda matchup: matchup[0].home_team.team_name if matchup[0].winner=='HOME' else matchup[0].away_team.team_name, axis=1)
+  matchupInfo = matchupInfo[['AwayTeam', 'AwayFinalScore', 'AwayLastScore', 'HomeTeam', 'HomeFinalScore', 'HomeLastScore', 'WINNER']]
+
+  comebackWins = matchupInfo.query('(AwayFinalScore > HomeFinalScore & AwayLastScore < HomeLastScore) | (HomeFinalScore > AwayFinalScore & HomeLastScore < AwayLastScore)')
+
+  return comebackWins
+
+#Get free agents that were added during the week and are still on the roster at the end of the week, and calculate their total and average scores for the week.
+def getPickupScores():
+  starttime = (dayZero + dt.timedelta(hours=6,days=1,weeks=getLastWeekNum()-1).total_seconds()) * 1000
+  endtime = (dayZero + dt.timedelta(days=1,weeks=getLastWeekNum()).total_seconds()) * 1000
+
+  recentActivity = getRecentActivity(60, 'FA')
+  recentActivity['Team'] = recentActivity.apply(lambda activity: activity[0].actions[0][0], axis=1)
+  recentActivity['Activity'] = recentActivity.apply(lambda activity: activity[0].actions[0][1], axis=1)
+  recentActivity['Player'] = recentActivity.apply(lambda activity: activity[0].actions[0][2], axis=1)
+  recentActivity['Date (epoch ms)'] = recentActivity.apply(lambda activity: activity[0].date, axis=1)
+  recentActivity['Roster'] = recentActivity.apply(lambda activity: [player.name for player in activity['Team'].roster],axis=1)
+  recentActivity['OnRoster'] = recentActivity.apply(lambda activity: activity['Player'] in activity['Roster'], axis=1)
+
+  recentActivity_waiver = getRecentActivity(60, 'WAIVER')
+  recentActivity_waiver['Team'] = recentActivity_waiver.apply(lambda activity: activity[0].actions[0][0], axis=1)
+  recentActivity_waiver['Activity'] = recentActivity_waiver.apply(lambda activity: activity[0].actions[0][1], axis=1)
+  recentActivity_waiver['Player'] = recentActivity_waiver.apply(lambda activity: activity[0].actions[0][2], axis=1)
+  recentActivity_waiver['Date (epoch ms)'] = recentActivity_waiver.apply(lambda activity: activity[0].date, axis=1)
+  recentActivity_waiver['Roster'] = recentActivity_waiver.apply(lambda activity: [player.name for player in activity['Team'].roster],axis=1)
+  recentActivity_waiver['OnRoster'] = recentActivity_waiver.apply(lambda activity: activity['Player'] in activity['Roster'], axis=1)
+
+  recentActivity = pd.concat([recentActivity,recentActivity_waiver], axis=0)
+  recentActivity = recentActivity.sort_values('Date (epoch ms)', ascending=False)
+
+  recentActivity = recentActivity[recentActivity['Date (epoch ms)'] <= endtime]
+  recentActivity = recentActivity[recentActivity['Date (epoch ms)'] >= starttime]
+  recentActivity = recentActivity.query('OnRoster == True')
+  recentActivity['totalPoints'] = recentActivity.apply(lambda row: getTotalScoredByPickup(row), axis=1)
+  recentActivity['avgPoints'] = recentActivity.apply(lambda row: getAverageScoredByPickup(row), axis=1)
+
+  return recentActivity
+
+
+#Create Dataframes
+
+currentWeekNum = getCurrentWeekNum()
+lastWeekNum = getLastWeekNum()
+standings = getStandings()
+bestPlayers = getBestPlayersLastWeek()
+closeMatchups = getCloseMatchups(lastWeekNum)
+powerMatchups = getPowerMatchups(currentWeekNum)
+underdogWins = getUnderdogWins(lastWeekNum)
+comebackWins = getComebackWins()
+pickupScores = getPickupScores
+totalTeamFPTS = getTotalFPTS(currentWeekNum)
